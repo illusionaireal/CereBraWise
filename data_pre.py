@@ -42,7 +42,10 @@ ps = os.listdir(pathImg)
 vectorMap = {}
 vectorList = []
 index = 0
-for p in ps:
+for name in imge_to_category:
+    p = name + '.jpg'
+    if p not in ps:
+        continue
     path2file=pathImg+'/'+p
     print(path2file)
     response = client.embeddings.create(
