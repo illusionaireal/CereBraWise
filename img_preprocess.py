@@ -4,7 +4,7 @@ import base64
 from openai import OpenAI
 from langchain.schema.runnable import RunnableLambda
 import os
-import data_pre
+import data_pre_old
 import numpy as np
 
 API_KEY ="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"
@@ -151,10 +151,10 @@ print_chain = RunnableLambda(pprint)
 def search_chain(inputs: ProcessorOutput) -> Dict:
     result = {}
     if inputs.vector:
-        d, i = data_pre.vector_faiss.search(np.array([inputs.vector], dtype='float32'), 4)
+        d, i = data_pre_old.vector_faiss.search(np.array([inputs.vector], dtype='float32'), 4)
         print("距离:", d)
         print("索引:", i)
-        result["matching_location"] = [list(data_pre.imge_to_category.items())[index][1] for index in np.nditer(i)]
+        result["matching_location"] = [list(data_pre_old.imge_to_category.items())[index][1] for index in np.nditer(i)]
     else:
         result["error"] = inputs.error
         print(inputs.error)

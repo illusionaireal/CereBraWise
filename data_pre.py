@@ -1,11 +1,10 @@
 from openai import OpenAI
-import os
-import pandas as pd
 import faiss
 import numpy as np
+import pickle
 
 client = OpenAI(
-  api_key="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",
+  api_key="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",
   base_url="https://integrate.api.nvidia.com/v1"
 )
  
@@ -16,8 +15,7 @@ id_to_category = {}
 imge_to_category = {}
 
 import csv
- 
-print()
+
 
 with open(index_label_to_category, 'r', encoding='utf-8') as csvfile:
     reader = csv.reader(csvfile)
@@ -34,31 +32,13 @@ with open(imageToId, 'r', encoding='utf-8') as csvfile:
     for row in reader:
         # 处理每一行数据
         imge_to_category[row[0]] = id_to_category[row[1]]
-print(imge_to_category)
 
 
-pathImg = "./data/dataImg"
-ps = os.listdir(pathImg)
-vectorMap = {}
-vectorList = []
-index = 0
-for name in imge_to_category:
-    p = name + '.jpg'
-    if p not in ps:
-        continue
-    path2file=pathImg+'/'+p
-    print(path2file)
-    response = client.embeddings.create(
-        input=[ "tourist attraction",
-        path2file],
-        model="nvidia/nvclip",
-        encoding_format="float"\
-    )
-    # vectorMap[index] = response.data[1].embedding
-    vectorList.append(response.data[1].embedding)
-    index = index + 1
-    print(response.data[1].embedding)
-    break
+
+with open('./vector.pkl', 'rb') as file:
+    vectorList = pickle.load(file)
+
+# 打印读取的List对象
 vector_np = np.array(vectorList)
 shape = vector_np.shape[1]
 vector_faiss = faiss.IndexFlatL2(shape)
