@@ -368,7 +368,7 @@ def handle_route_selection(state: Dict, user_input: str) -> Generator[Dict, None
     })
     
     # 流式输出处理
-    yield from format_streaming_response(render_markdown(result))
+    yield from format_streaming_response(result)
     return {
         **state,
         "step": TourismState.INIT,
@@ -543,6 +543,56 @@ def new_state_machine(state: Dict, user_input: str) -> Generator[Dict, None, Non
         yield {"final_state": state}
 
 
+# 旧的交互演示函数
+def interactive_demo():
+    """命令行交互演示"""
+    print("🛫 旅游助手 控制台交互模式（输入exit退出）")
+    state = {"step": TourismState.INIT}
+
+    while True:
+        try:
+            # 根据状态提示输入
+            if state["step"] == TourismState.INIT:
+                user_input = input("\n> 按回车开始规划旅程：") or ""
+            elif state["step"] == TourismState.GET_PREFERENCE:
+                user_input = input("\n> 请描述您的旅游偏好（如：想看皇家建筑）：")
+            elif state["step"] == TourismState.SELECT_SPOT:
+                print("\n推荐景点：")
+                for i, spot in enumerate(state["options"], 1):
+                    print(f"  {i}. {spot}")
+                user_input = input("> 请选择景点编号或名称：")
+            elif state["step"] == TourismState.SELECT_ROUTE:
+                print("\n推荐路线：")
+                for i, route in enumerate(state["options"], 1):
+                    print(f"  {i}. {route}")
+                user_input = input("> 请选择路线编号或名称：")
+
+            if user_input.lower() == "exit":
+                break
+
+            # 处理输入
+            full_response = ""
+            response_gen = state_machine(state, user_input)
+            for chunk in response_gen:
+                if chunk.get("final_state"):
+                    state = chunk["final_state"]
+                    continue
+                content = chunk['messages'][0]['content']
+                print(f"\r系统：{full_response}{content}", end="", flush=True)
+                full_response += content
+
+            # 显示最终结果
+            if state["step"] == TourismState.INIT and "selected_route" in state:
+                print("\n\n✅ 行程规划完成！")
+                print("-"*50)
+                print(full_response)
+                print("-"*50)
+                state = {"step": TourismState.INIT}  # 重置状态
+
+        except KeyboardInterrupt:
+            print("\n\n👋 感谢使用，再见！")
+            break
+
 # 新增交互演示函数
 def interactive_demo_with_chain():
     """命令行交互演示"""
@@ -598,47 +648,7 @@ def interactive_demo_with_chain():
             print("\n\n👋 感谢使用，再见！")
             break
 
-# 旧的状态机函数，保留用于验证。
-def interactive_demo():
-    """命令行交互演示"""
-    print("🛫 旅游助手 控制台交互模式（输入exit退出）")
-    state = {"step": TourismState.INIT}
-    
-    while True:
-        try:
-            # 根据状态提示输入
-            if state["step"] == TourismState.INIT:
-                user_input = input("\n> 按回车开始规划旅程：") or ""
-            elif state["step"] == TourismState.GET_PREFERENCE:
-                user_input = input("\n> 请描述您的旅游偏好（如：想看皇家建筑）：")
-            elif state["step"] == TourismState.SELECT_SPOT:
-                print("\n推荐景点：")
-                for i, spot in enumerate(state["options"], 1):
-                    print(f"  {i}. {spot}")
-                user_input = input("> 请选择景点编号或名称：")
-            elif state["step"] == TourismState.SELECT_ROUTE:
-                print("\n推荐路线：")
-                for i, route in enumerate(state["options"], 1):
-                    print(f"  {i}. {route}")
-                user_input = input("> 请选择路线编号或名称：")
-            
-            if user_input.lower() == "exit":
-                break
 
-            # 修改调用点为新状态机
-            response_gen = new_state_machine(state, user_input)  # 改为调用新状态机
-            
-            # 显示最终结果
-            if state["step"] == TourismState.INIT and "selected_route" in state:
-                print("\n\n✅ 行程规划完成！")
-                print("-"*50)
-                print(response_gen.send(None))
-                print("-"*50)
-                state = {"step": TourismState.INIT}  # 重置状态
-
-        except KeyboardInterrupt:
-            print("\n\n👋 感谢使用，再见！")
-            break
 
 # ---------- 更新主流程 ----------
 if __name__ == "__main__":
@@ -648,6 +658,6 @@ if __name__ == "__main__":
     print("✅ 大模型初始化成功")
     
     # 启动交互模式
-    interactive_demo_with_chain()
-    # interactive_demo() #旧状态机函数
+    #interactive_demo_with_chain() 使用状态链的demo，需要DEBUG
+    interactive_demo() #旧状态机函数
 
