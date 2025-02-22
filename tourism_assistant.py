@@ -19,9 +19,9 @@ class TourismState(Enum):
     SELECT_ROUTE = "选择路线"
 
 
-# ---------- 处理链构建 ----------
+# ---------- 处理链模版 ----------
 def build_processing_chain(prompt: PromptTemplate) -> RunnableSequence:
-    """修正后的处理链"""
+    """处理链模版"""
     llm = create_llm()
     return (
         RunnablePassthrough()
@@ -115,8 +115,8 @@ OPTION_PROMPTS = {
 
 要求：
 1. 只返回JSON格式，包含spots字段的数组
-2. 仅包含景点名称，不要描述
-3. 示例：["景点1", "景点2", "景点3"]"""
+2. 包含景点名称和描述
+3. 示例：["景点1：景点1描述", "景点2：景点2描述", "景点3：景点3描述"]"""
     ),
     "route": PromptTemplate(
         input_variables=["content"],
@@ -125,8 +125,8 @@ OPTION_PROMPTS = {
 
 要求：
 1. 只返回JSON格式，包含routes字段的数组  
-2. 名称需完整包含路线特色
-3. 示例：["路线1", "路线2", "路线3"]"""
+2. 包含完整名称和路线特色
+3. 示例：["路线1：路线特色", "路线2：路线特色", "路线3：路线特色"]"""
     )
 }
 
@@ -158,67 +158,169 @@ def parse_options(content: str, option_type: str) -> List[str]:
             "route": r"\d+\.\s+\*\*(.*?)\*\*|\d+\.\s+\[(.*?)\]"
         }
         return re.findall(patterns[option_type], content)
+        
+
+def get_rag_multi_model_context(query:str)->str:
+    '''根据用户输入使用RAG多模态得到信息'''
+    # 暂时直接返回，待算法组结果。
+
+    return query
+
+def handle_preference_chain() -> RunnableSequence:
+    """专用偏好处理链"""
+    llm = create_llm()
+    spot_prompt = PromptTemplate(
+        input_variables=["preference_info"],  # 确保输入变量匹配
+        template="""作为资深旅行规划师，根据用户需求推荐3个景点：
+        
+    用户需求：{preference_info}
+
+    请按以下格式推荐：
+    1. [景点名称]：[50字特色描述]
+    2. [景点名称]：[50字特色描述]
+    3. [景点名称]：[50字特色描述]"""
+    )
+    return (
+        RunnablePassthrough()
+        | spot_prompt 
+        | llm.bind(stop=["\n\n"])
+        | RunnableLambda(lambda x: x.content)
+    )
 
 def handle_preference(state: Dict, user_input: str) -> Generator[Dict, None, Dict]:
-    """动态生成景点推荐（上下文感知版）"""
-    # 从知识库获取上下文（示例）
-    context = {
-        "spots": ["故宫", "颐和园", "天坛", "圆明园"],
-        "history": "北京主要皇家景点"
-    }
+    """动态生成景点推荐（知识库增强版）"""
+    # 从知识库动态获取上下文
+    preference = get_rag_multi_model_context(user_input)  # RAG多模态解析
     
-    chain = build_processing_chain(SPOT_PROMPT)
-    result = chain.invoke({
-        "context": context,  # 动态上下文
-        "preference": user_input
-    })
+    # 正确初始化处理链
+    chain = handle_preference_chain()  
+    result = chain.invoke({"preference_info": preference})  # 参数在此处传递
+    
+    # 类型安全检查
+    if not isinstance(result, str):
+        result = str(result)
     
     # 流式输出处理
     yield from format_streaming_response(result)
-    
-    # 更新上下文
-    new_context = {
-        **context,
-        "preference_details": user_input,
-        "generated_at": time.strftime("%Y-%m-%d %H:%M")
-    }
     
     return {
         **state,
         "step": TourismState.SELECT_SPOT,
-        "preference": user_input,
         "options": parse_options(result, "spot"),
-        "context": new_context  # 传递上下文
+        "context": {
+            "preference_info": preference,
+            "timestamp": time.strftime("%Y-%m-%d %H:%M")
+        }
     }
+
+def spot_selection_parse(user_input: str, options: list, context: dict) -> str:
+    """使用小模型解析景点选择"""
+    prompt = PromptTemplate(
+        template="从用户输入中解析景点选择：\n选项列表：{options}\n用户输入：{user_input}\n返回[景点名称：特色描述]",
+        input_variables=["options", "user_input"]
+    )
+    chain = prompt | option_parser_llm | StrOutputParser()
+    return chain.invoke({"options": options, "user_input": user_input})
+
+def handle_spot_selection_chain() -> RunnableSequence:
+    """专用景点处理链"""
+    llm = create_llm()
+    route_prompt = PromptTemplate(
+        input_variables=["preference_info", "spot_info"],
+        template="""作为资深旅行规划师，根据用户需求和选定景点设计3条特色旅游路线:
+    用户偏好：{preference_info}
+    选定景点：{spot_info}
+
+    请设计3条特色游览路线：
+    1. [路线名称]：[路线特色与亮点]
+    2. [路线名称]：[路线特色与亮点]
+    3. [路线名称]：[路线特色与亮点]"""
+    )
+    return (
+        RunnablePassthrough()
+        | route_prompt
+        | llm
+        | StrOutputParser()
+    )
 
 def handle_spot_selection(state: Dict, user_input: str) -> Generator[Dict, None, Dict]:
     """动态生成路线推荐（增强版）"""
-    chain = build_processing_chain(ROUTE_PROMPT)
-    result = chain.invoke({"preference": state["preference"], "spot": "颐和园"})
-    
+    selected_spot = spot_selection_parse(
+        user_input, 
+        state["options"],
+        context=state["context"]
+    )
+
+
+    result = handle_spot_selection_chain().invoke({
+        "preference_info": state["context"]["preference_info"],
+        "spot_info": selected_spot
+    })
+
     # 流式输出处理
     yield from format_streaming_response(result)
     
-    # 使用小模型解析路线选项
-    try:
-        options = parse_options(result, "route")
-    except Exception:
-        options = re.findall(r"\d+\.\s+\[(.*?)\]", result)
-    
     return {
-        **state, 
+        **state,
         "step": TourismState.SELECT_ROUTE,
-        "selected_spot": "颐和园",
-        "options": options
+        "options": parse_options(result, "route"),
+        "context": {
+            "preference_info": state["context"]["preference_info"],
+            "spot_info": selected_spot,
+            "timestamp": time.strftime("%Y-%m-%d %H:%M")
+        }
     }
+
+def route_selection_parse(user_input: str, options: list, context: dict) -> str:
+    """使用小模型解析路线选择"""
+    prompt = PromptTemplate(
+        template="从用户输入解析路线选择：\n选项列表：{options}\n用户输入：{user_input}\n返回[路线名称：特色描述]",
+        input_variables=["options", "user_input"]
+    )
+    chain = prompt | option_parser_llm | StrOutputParser()
+    return chain.invoke({"options": options, "user_input": user_input})
+
+def handle_route_selection_chain() -> RunnableSequence:
+    """专用攻略生成链"""
+    llm = create_llm()
+    GUIDE_PROMPT = PromptTemplate(
+        input_variables=["preference_info", "spot_info", "route_info"],
+        template="""# 深度旅游攻略生成
+        
+    用户需求：{preference_info}
+    选定景点：{spot_info}
+    选择路线：{route_info}
+
+    请包含以下内容，输出排版好的markdown：
+    ## 行程安排（精确到小时，表格形式）
+    ## 必玩项目（包含推荐星级）
+    ## 餐饮推荐
+    ## 预算估算
+    ## 实用贴士"""
+    )
+    return (
+        RunnablePassthrough()
+        | GUIDE_PROMPT
+        | llm.bind(stop=["\n\n"])
+        | RunnableLambda(lambda x: x.content)
+    )
 
 def handle_route_selection(state: Dict, user_input: str) -> Generator[Dict, None, Dict]:
     """动态生成攻略（增强版）"""
-    chain = build_processing_chain(GUIDE_PROMPT)
+
+    # 解析用户选择的景点
+    selected_route = route_selection_parse(
+        user_input,
+        state["options"],
+        context=state["context"]
+    )
+
+    # 你好
+    chain = handle_route_selection_chain()
     result = chain.invoke({
-        "preference": state["preference"],
-        "spot": state["selected_spot"],
-        "route": "西堤漫步线"
+        "preference_info": state["context"]["preference_info"],
+        "spot_info": state["context"]["spot_info"],
+        "route_info": selected_route
     })
     
     # 流式输出处理
@@ -226,54 +328,18 @@ def handle_route_selection(state: Dict, user_input: str) -> Generator[Dict, None
     return {
         **state,
         "step": TourismState.INIT,
-        "selected_route": "西堤漫步线"
+        "context": {
+            "preference_info": state["context"]["preference_info"],
+            "spot_info": state["context"]["spot_info"],
+            "route_info": selected_route,
+            "timestamp": time.strftime("%Y-%m-%d %H:%M")
+        }
     }
 
 def handle_unknown(state: Dict, _: str) -> Generator[Dict, None, None]:
     """未知状态处理"""
     yield from format_streaming_response("⚠️ 系统遇到未知状态，正在重置...")
     return {**state, "step": TourismState.INIT}
-
-# ---------- 完整提示模板 ----------
-SPOT_PROMPT = PromptTemplate(
-    input_variables=["context", "preference"],
-    template="""作为资深旅行规划师，根据用户需求推荐3个景点：
-    
-历史背景：{context}
-用户需求：{preference}
-
-请按以下格式推荐：
-1. [景点名称]：[50字特色描述]
-2. [景点名称]：[50字特色描述]
-3. [景点名称]：[50字特色描述]"""
-)
-
-ROUTE_PROMPT = PromptTemplate(
-    input_variables=["preference", "spot"],
-    template="""用户偏好：{preference}
-选定景点：{spot}
-
-请设计3种特色游览路线：
-1. [路线名称]：[路线特色与亮点]
-2. [路线名称]：[路线特色与亮点]
-3. [路线名称]：[路线特色与亮点]"""
-)
-
-GUIDE_PROMPT = PromptTemplate(
-    input_variables=["preference", "spot", "route"],
-    template="""# 深度旅游攻略生成
-    
-用户需求：{preference}
-选定景点：{spot}
-选择路线：{route}
-
-请包含以下内容：
-## 行程安排（精确到小时）
-## 必玩项目
-## 餐饮推荐
-## 预算估算
-## 实用贴士"""
-)
 
 def test_llm_connection():
     """大模型连通性测试"""
@@ -405,7 +471,7 @@ def test_route_selection(prev_state: Dict) -> Dict:
 # 新增交互演示函数
 def interactive_demo():
     """命令行交互演示"""
-    print("🛫 旅游助手 交互模式（输入exit退出）")
+    print("🛫 旅游助手 控制台交互模式（输入exit退出）")
     state = {"step": TourismState.INIT}
     
     while True:
