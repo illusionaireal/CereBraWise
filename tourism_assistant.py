@@ -558,26 +558,39 @@ def interactive_demo_with_chain():
                 user_input = input("\n> 请描述您的旅游偏好（如：想看皇家建筑）：")
             elif state["step"] == TourismState.SELECT_SPOT:
                 print("\n推荐景点：")
-                for i, spot in enumerate(state["options"], 1):
+                for i, spot in enumerate(state.get("options", []), 1):
                     print(f"  {i}. {spot}")
                 user_input = input("> 请选择景点编号或名称：")
             elif state["step"] == TourismState.SELECT_ROUTE:
                 print("\n推荐路线：")
-                for i, route in enumerate(state["options"], 1):
+                for i, route in enumerate(state.get("options", []), 1):
                     print(f"  {i}. {route}")
                 user_input = input("> 请选择路线编号或名称：")
             
             if user_input.lower() == "exit":
                 break
 
-            # 修改调用点为新状态机
-            response_gen = new_state_machine(state, user_input)  # 改为调用新状态机
+            # 获取响应生成器
+            response_gen = new_state_machine(state, user_input)
             
-            # 显示最终结果
-            if state["step"] == TourismState.INIT and "selected_route" in state:
+            # 处理响应流
+            full_response = ""
+            for chunk in response_gen:
+                if chunk.get("final_state"):
+                    # 关键修复：更新状态
+                    state = chunk["final_state"]
+                    continue
+                if chunk.get("messages"):
+                    content = chunk['messages'][0]['content']
+                    print(f"\r系统：{full_response}{content}", end="", flush=True)
+                    full_response += content
+            
+            # 状态结束处理
+            if state["step"] == TourismState.INIT and "context" in state:
                 print("\n\n✅ 行程规划完成！")
                 print("-"*50)
-                print(response_gen.send(None))
+                if state["context"].get("route_info"):
+                    print(state["context"]["route_info"])
                 print("-"*50)
                 state = {"step": TourismState.INIT}  # 重置状态
 
