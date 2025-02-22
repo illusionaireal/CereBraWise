@@ -15,7 +15,6 @@ NVIDIA_API_KEY = "nvapi-9gKEBW-M4g6TJdR4hQPHloj2B8wRXFZz54xNdqCydAQoJIWAdPPF4vKD
 # ---------- 状态枚举修正 ----------
 class TourismState(Enum):
     INIT = "初始化"
-    GET_PREFERENCE = "获取偏好"
     SELECT_SPOT = "选择景点"
     SELECT_ROUTE = "选择路线"
 
@@ -72,14 +71,6 @@ def build_state_chain() -> RunnableBranch:
         (lambda s: s["step"] == TourismState.INIT, 
          RunnableAssign({
              "messages": RunnableLambda(handle_init) | format_streaming_response,
-             "step": lambda _: TourismState.GET_PREFERENCE
-         })),
-         
-        # GET_PREFERENCE状态处理
-        (lambda s: s["step"] == TourismState.GET_PREFERENCE,
-         RunnableAssign({
-             "messages": RunnableLambda(handle_preference) | format_streaming_response,
-             "options": RunnableLambda(lambda s: parse_options(s["messages"], "spot")),
              "step": lambda _: TourismState.SELECT_SPOT
          })),
          
@@ -120,7 +111,6 @@ def state_machine(state: Dict, user_input: str) -> Generator[Dict, None, None]:
     }
     handlers = {
         TourismState.INIT: handle_init,
-        TourismState.GET_PREFERENCE: handle_preference,
         TourismState.SELECT_SPOT: handle_spot_selection,
         TourismState.SELECT_ROUTE: handle_route_selection
     }
@@ -137,18 +127,41 @@ def state_machine(state: Dict, user_input: str) -> Generator[Dict, None, None]:
         new_state = e.value if isinstance(e.value, dict) else current_state
         yield {"messages": [{"role": "assistant", "content": ""}], "final_state": new_state}
 
-# ---------- 状态处理函数重构 ----------
-def handle_init(state: Dict, _: str) -> Generator[Dict, None, Dict]:
-    """初始化处理"""
-    full_response = "🏖️ 请问您想要什么样的旅游体验呢？"
-    yield from format_streaming_response(full_response)
-    # 明确返回更新后的状态
+# ---------- 状态处理函数合并 ----------
+def handle_init(state: Dict, user_input: str = None) -> Generator[Dict, None, Dict]:
+    """合并初始化与偏好处理"""
+    # 首次进入时发送欢迎语
+    if not user_input:
+        full_response = "🏖️ 欢迎使用智能旅游助手！请描述您的旅游偏好（例如：想看皇家建筑/喜欢自然风光）："
+        yield from format_streaming_response(full_response)
+        return {
+            **state,
+            "step": TourismState.SELECT_SPOT,
+            "preference": None,
+            "selected_spot": None,
+            "selected_route": None
+        }
+    
+    # 处理用户输入的偏好
+    image_info = get_rag_multi_model_context("")  # 根据实际需求传递图片参数
+    chain = handle_preference_chain()  
+    result = chain.invoke({
+        "preference_info": user_input,
+        "image_info": image_info,
+    })
+
+    # 流式输出处理
+    yield from format_streaming_response(result)
+    
     return {
         **state,
-        "step": TourismState.GET_PREFERENCE,
-        "preference": None,
-        "selected_spot": None,
-        "selected_route": None
+        "step": TourismState.SELECT_SPOT,
+        "options": parse_options(result, "spot"),
+        "context": {
+            "preference_info": user_input,
+            "image_info": image_info,
+            "timestamp": time.strftime("%Y-%m-%d %H:%M")
+        }
     }
 
 # 新增解析提示模板
@@ -226,10 +239,10 @@ def handle_preference_chain() -> RunnableSequence:
     llm = create_llm()
     spot_prompt = PromptTemplate(
         input_variables=["preference_info", "image_info"],  # 确保输入变量匹配
-        template="""作为资深旅行规划师，根据用户需求推荐3个景点：
+        template="""作为资深旅行规划师，根据用户输入的信息推荐3个景点：
     
-    用户需求：{preference_info}
-    同时根据用户上传的图片检索到了下面的地方：{image_info}
+    用户输入的文本信息：{preference_info}
+    用户输入的图片信息：{image_info}
 
     请按以下格式推荐：
     1. [景点名称]：[50字特色描述]
@@ -242,36 +255,6 @@ def handle_preference_chain() -> RunnableSequence:
         | llm.bind(stop=["\n\n"])
         | RunnableLambda(lambda x: x.content)
     )
-
-def handle_preference(state: Dict, user_input: str, image: str = None) -> Generator[Dict, None, Dict]:
-    """动态生成景点推荐（知识库增强版）"""
-    # 从知识库动态获取上下文
-    image_info = get_rag_multi_model_context(image)  # RAG多模态解析
-    
-    # 正确初始化处理链
-    chain = handle_preference_chain()  
-    result = chain.invoke({
-        "preference_info": user_input,
-        "image_info": image_info,
-    })  # 参数在此处传递
-    
-    # 类型安全检查
-    if not isinstance(result, str):
-        result = str(result)
-    
-    # 流式输出处理
-    yield from format_streaming_response(result)
-    
-    return {
-        **state,
-        "step": TourismState.SELECT_SPOT,
-        "options": parse_options(result, "spot"),
-        "context": {
-            "preference_info": user_input,
-            "image_info": image_info,
-            "timestamp": time.strftime("%Y-%m-%d %H:%M")
-        }
-    }
 
 def spot_selection_parse(user_input: str, options: list, context: dict) -> str:
     """使用小模型解析景点选择"""
@@ -427,10 +410,10 @@ def test_llm_connection():
 
 # ---------- 新增测试验证函数 ----------
 def test_initialization() -> Dict:
-    """测试初始化流程"""
-    print("\n=== 测试初始化 ===")
+    """更新后的初始化测试"""
+    print("\n=== 测试初始化流程 ===")
     state = {"step": TourismState.INIT}
-    response_gen = state_machine(state, "")
+    response_gen = state_machine(state, "")  # 空输入触发欢迎语
     
     full_response = ""
     final_state = state
@@ -447,7 +430,8 @@ def test_initialization() -> Dict:
         pass
     
     # 验证关键字段
-    assert final_state["step"] == TourismState.GET_PREFERENCE, "初始化后应进入偏好获取状态"
+    assert final_state["step"] == TourismState.SELECT_SPOT, "初始化后应进入景点选择状态"
+    assert "context" in final_state, "应包含上下文信息"
     print("✅ 初始化测试通过")
     return final_state
 
@@ -559,94 +543,42 @@ def new_state_machine(state: Dict, user_input: str) -> Generator[Dict, None, Non
         yield {"final_state": state}
 
 
-# 旧的交互演示函数
-def interactive_demo():
-    """命令行交互演示"""
-    print("🛫 旅游助手 控制台交互模式（输入exit退出）")
-    state = {"step": TourismState.INIT}
-
-    while True:
-        try:
-            # 根据状态提示输入
-            if state["step"] == TourismState.INIT:
-                user_input = input("\n> 按回车开始规划旅程：") or ""
-            elif state["step"] == TourismState.GET_PREFERENCE:
-                user_input = input("\n> 请描述您的旅游偏好（如：想看皇家建筑）：")
-            elif state["step"] == TourismState.SELECT_SPOT:
-                print("\n推荐景点：")
-                for i, spot in enumerate(state["options"], 1):
-                    print(f"  {i}. {spot}")
-                user_input = input("> 请选择景点编号或名称：")
-            elif state["step"] == TourismState.SELECT_ROUTE:
-                print("\n推荐路线：")
-                for i, route in enumerate(state["options"], 1):
-                    print(f"  {i}. {route}")
-                user_input = input("> 请选择路线编号或名称：")
-
-            if user_input.lower() == "exit":
-                break
-
-            # 处理输入
-            full_response = ""
-            response_gen = state_machine(state, user_input)
-            for chunk in response_gen:
-                if chunk.get("final_state"):
-                    state = chunk["final_state"]
-                    continue
-                content = chunk['messages'][0]['content']
-                print(f"\r系统：{full_response}{content}", end="", flush=True)
-                full_response += content
-
-            # 显示最终结果
-            if state["step"] == TourismState.INIT and "selected_route" in state:
-                print("\n\n✅ 行程规划完成！")
-                print("-"*50)
-                print(full_response)
-                print("-"*50)
-                state = {"step": TourismState.INIT}  # 重置状态
-
-        except KeyboardInterrupt:
-            print("\n\n👋 感谢使用，再见！")
-            break
-
-# 新增交互演示函数
+# 合并后的交互演示函数
 def interactive_demo_with_chain():
-    """命令行交互演示"""
-    print("🛫 旅游助手 控制台交互模式（输入exit退出）")
+    """使用Chain的交互演示"""
+    print("🛫 旅游助手 Chain版本（输入exit退出）")
     state = {"step": TourismState.INIT}
     
     while True:
         try:
-            # 根据状态提示输入
+            # 获取用户输入
+            prompt = "\n> "
             if state["step"] == TourismState.INIT:
-                user_input = input("\n> 按回车开始规划旅程：") or ""
-            elif state["step"] == TourismState.GET_PREFERENCE:
-                user_input = input("\n> 请描述您的旅游偏好（如：想看皇家建筑）：")
+                prompt = "\n> 请描述您的旅游偏好（如：想看皇家建筑）："
             elif state["step"] == TourismState.SELECT_SPOT:
-                print("\n推荐景点：")
-                for i, spot in enumerate(state.get("options", []), 1):
-                    print(f"  {i}. {spot}")
-                user_input = input("> 请选择景点编号或名称：")
+                print("\n可选景点：")
+                for i, opt in enumerate(state.get("options", []), 1):
+                    print(f"  {i}. {opt}")
+                prompt = "> 请选择景点："
             elif state["step"] == TourismState.SELECT_ROUTE:
                 print("\n推荐路线：")
-                for i, route in enumerate(state.get("options", []), 1):
-                    print(f"  {i}. {route}")
-                user_input = input("> 请选择路线编号或名称：")
-            
+                for i, opt in enumerate(state.get("options", []), 1):
+                    print(f"  {i}. {opt}")
+                prompt = "> 请选择路线："
+                
+            user_input = input(prompt) or ""
             if user_input.lower() == "exit":
                 break
-
-            # 获取响应生成器
-            response_gen = new_state_machine(state, user_input)
+                
+            # 使用Chain处理状态
+            response_gen = chain_based_state_machine(state, user_input)
             
             # 处理响应流
             full_response = ""
             for chunk in response_gen:
-                if chunk.get("final_state"):
-                    # 关键修复：更新状态
+                if "final_state" in chunk:
                     state = chunk["final_state"]
-                    continue
-                if chunk.get("messages"):
+                elif "messages" in chunk:
                     content = chunk['messages'][0]['content']
                     print(f"\r系统：{full_response}{content}", end="", flush=True)
                     full_response += content
@@ -664,18 +596,82 @@ def interactive_demo_with_chain():
             print("\n\n👋 感谢使用，再见！")
             break
 
+def build_state_transition_chain() -> RunnableSequence:
+    """构建状态转换链"""
+    llm = create_llm()
+    
+    state_prompt = PromptTemplate(
+        input_variables=["current_state", "user_input", "context"],
+        template="""基于当前状态和用户输入，决定下一个状态：
 
+当前状态: {current_state}
+用户输入: {user_input}
+上下文信息: {context}
 
-# ---------- 更新主流程 ----------
+可选状态:
+- INIT: 初始化状态，用户输入偏好，生成景点
+- SELECT_SPOT: 选择景点，生成路线
+- SELECT_ROUTE: 选择路线，生成攻略
+
+请只返回下一个状态的名称（如：SELECT_SPOT）。"""
+    )
+
+    return (
+        RunnablePassthrough()
+        | state_prompt
+        | llm
+        | StrOutputParser()
+        | RunnableLambda(lambda x: TourismState[x.strip()])
+    )
+
+# 修改状态机实现
+def chain_based_state_machine(state: Dict, user_input: str) -> Generator[Dict, None, None]:
+    """基于Chain的状态机实现"""
+    
+    # 初始化状态转换链
+    transition_chain = build_state_transition_chain()
+    
+    # 状态处理器映射
+    handlers = {
+        TourismState.INIT: handle_init,
+        TourismState.SELECT_SPOT: handle_spot_selection,
+        TourismState.SELECT_ROUTE: handle_route_selection
+    }
+    
+    try:
+        # 获取下一个状态
+        next_state = transition_chain.invoke({
+            "current_state": state["step"].name,
+            "user_input": user_input,
+            "context": json.dumps(state.get("context", {}), ensure_ascii=False)
+        })
+        
+        # 获取对应的处理器
+        handler = handlers.get(next_state, handle_unknown)
+        
+        # 更新状态
+        state["step"] = next_state
+        
+        # 执行处理器
+        response_gen = handler(state, user_input)
+        
+        # 流式输出处理
+        for chunk in response_gen:
+            if isinstance(chunk, dict) and "messages" in chunk:
+                yield chunk
+            
+    except Exception as e:
+        yield from format_streaming_response(f"⚠️ 状态处理异常：{str(e)}")
+        yield {"final_state": state}
+
+# 在主函数中使用新的demo
 if __name__ == "__main__":
     print("开始咯~")
-    # 初始化大模型
     llm = create_llm()
     print("✅ 大模型初始化成功")
     
-    # 启动交互模式
-    # interactive_demo_with_chain() 使用状态链的demo，需要DEBUG
-    interactive_demo() #旧状态机函数
-    # get_rag_multi_model_context("")
+    # 使用基于Chain的交互demo
+    interactive_demo_with_chain()
+    # interactive_demo() #旧状态机交互demo
 
 
