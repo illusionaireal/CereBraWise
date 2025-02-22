@@ -1,5 +1,7 @@
 import gradio as gr
 from PIL import Image
+
+import img_preprocess
 import tourism_assistant
 
 # 模拟一个简单的 AI 回答函数，支持流式输出
@@ -20,19 +22,23 @@ def chart_agent_gr(image_input, user_input, chat_history):
     else:
         response_gen = tourism_assistant.state_machine(final_state, user_input)
     try:
+        temp_state = {}
         current_response = ""
         for chunk in response_gen:
             if chunk.get("final_state"):
-                final_state = chunk["final_state"]
+                temp_state = chunk["final_state"]
                 continue
             content = chunk['messages'][0]['content']
             current_response += content
             # 合并历史记录和当前生成的内容
-            updated_history = chat_history + [(user_input if (not image_input) and final_state.get("step") != tourism_assistant.TourismState.GET_PREFERENCE else f"![image]({image_input})", current_response)]
+            updated_history = chat_history + [(user_input if (not image_input) and final_state.get("step") != tourism_assistant.TourismState.GET_PREFERENCE
+                                               else f'<img src="data:image/png;base64,{img_preprocess.convert_image_to_base64(image_input)}" alt="image" style="max-width: 300px; max-height: 300px;">', current_response)]
             yield updated_history  # 流式返回更新后的聊天历史
         # 生成完成后，将完整的对话追加到历史记录中
-        chat_history.append((user_input if (not image_input) and final_state.get("step") != tourism_assistant.TourismState.GET_PREFERENCE else f"![image]({image_input})", current_response))
+        chat_history.append((user_input if (not image_input) and final_state.get("step") != tourism_assistant.TourismState.GET_PREFERENCE
+                             else f'<img src="data:image/png;base64,{img_preprocess.convert_image_to_base64(image_input)}" alt="image" style="max-width: 300px; max-height: 300px;">', current_response))
         print("\n" + "-" * 50)
+        final_state = temp_state
     except StopIteration:
         pass
     #         full_response += content
