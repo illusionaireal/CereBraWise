@@ -243,10 +243,10 @@ def handle_preference_chain() -> RunnableSequence:
         | RunnableLambda(lambda x: x.content)
     )
 
-def handle_preference(state: Dict, user_input: str, image: str = None) -> Generator[Dict, None, Dict]:
+def handle_preference(state: Dict, image_input: str = None, user_input: str = None) -> Generator[Dict, None, Dict]:
     """动态生成景点推荐（知识库增强版）"""
     # 从知识库动态获取上下文
-    image_info = get_rag_multi_model_context(image)  # RAG多模态解析
+    image_info = get_rag_multi_model_context(image_input)  # RAG多模态解析
     
     # 正确初始化处理链
     chain = handle_preference_chain()  
