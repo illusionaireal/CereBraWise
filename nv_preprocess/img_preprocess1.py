@@ -1,9 +1,53 @@
 from dataclasses import dataclass
 from typing import Optional, List, Dict
 import base64
-from openai import OpenAI
 from langchain.schema.runnable import RunnableLambda
 import os
+import uuid 
+
+import requests
+os.environ["NVIDIA_API_KEY"] = "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"
+
+header_auth = f"Bearer {os.getenv('NVIDIA_API_KEY')}"
+
+def _upload_asset(input, description):
+    """
+    Uploads an asset to the NVCF API.
+    :param input: The binary asset to upload
+    :param description: A description of the asset
+
+    """
+    assets_url = "https://api.nvcf.nvidia.com/v2/nvcf/assets"
+
+    headers = {
+        "Authorization": header_auth,
+        "Content-Type": "application/json",
+        "accept": "application/json",
+    }
+
+    s3_headers = {
+        "x-amz-meta-nvcf-asset-description": description,
+        "content-type": "image/jpeg",
+    }
+
+    payload = {"contentType": "image/jpeg", "description": description}
+
+    response = requests.post(assets_url, headers=headers, json=payload, timeout=30)
+
+    response.raise_for_status()
+
+    asset_url = response.json()["uploadUrl"]
+    asset_id = response.json()["assetId"]
+
+    response = requests.put(
+        asset_url,
+        data=input,
+        headers=s3_headers,
+        timeout=300,
+    )
+
+    response.raise_for_status()
+    return uuid.UUID(asset_id)
 
 
 @dataclass
@@ -13,48 +57,12 @@ class ProcessorOutput:
     error: Optional[str] = None
     metadata: Optional[Dict] = None
 
-class ClientManager:
-    """API客户端管理器（单例模式）"""
-    _instance = None
-    _client = None
-    _api_key = None
-    _model = None
-    
-    def __new__(cls):
-        if cls._instance is None:
-            cls._instance = super().__new__(cls)
-        return cls._instance
-    
-    def get_client(self, api_key: str = None) -> Optional[OpenAI]:
-        """获取API客户端，如果配置变化则重新创建"""
-        # 加载最新的环境变量
-        current_api_key = api_key or os.getenv("NVIDIA_API_KEY")
-            
-        # 如果配置变化，重新创建客户端
-        if (current_api_key != self._api_key):
-            try:
-                self._client = OpenAI(
-                    api_key=current_api_key,
-                    base_url="https://integrate.api.nvidia.com/v1"
-                )
-                self._api_key = current_api_key
-            except Exception as e:
-                print(f"初始化API客户端失败: {e}")
-                self._reset()
-                
-        return self._client
-    
-    def _reset(self):
-        """重置客户端状态"""
-        self._client = None
-        self._api_key = None
 
 class Preprocessor:
-    def __init__(self, api_key: str = None):
+    def __init__(self):
         """初始化预处理器"""
         self.process_chain = RunnableLambda(self._process)
-        self.client_manager = ClientManager()
-        self.api_key = api_key
+        self.nvai_url="https://ai.api.nvidia.com/v1/cv/nvidia/nv-dinov2"
         self.preprocess_chain = RunnableLambda(self._preprocess)        
         
     def _process(self, inputs: Dict[str, str]) -> ProcessorOutput:
@@ -76,29 +84,32 @@ class Preprocessor:
             if not image_b64:
                 return ProcessorOutput(error="未提供图片")
                 
-            # 获取客户端
-            client = self.client_manager.get_client(self.api_key)
-            if not client:
-                return ProcessorOutput(error="未配置API Key或初始化失败")
-            
-            prompt = inputs.get("prompt", "tourist attraction")
-            
-            # 使用NVIDIA CLIP生成向量
-            response = client.embeddings.create(
-                input=[
-                    prompt,
-                    f"data:image/png;base64,{image_b64}"
-                ],
-                model=inputs.get("model", "nvidia/nvclip"),
-                encoding_format="float"
-            )
+            # For images of size less than 200 KB send as base64 string
+            payload = {
+            "messages": [
+                {
+                "content": {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": f"data:image/jpeg;base64,{image_b64}"
+                    }
+                }
+                }
+            ],
+            }
+
+            headers = {
+                "Content-Type": "application/json",
+                "Authorization": header_auth,
+                "Accept": "application/json"
+            }
+
+            response = requests.post(self.nvai_url, headers=headers, json=payload)
             
             return ProcessorOutput(
-                vector=response.data[0].embedding,
-                metadata={
-                    "prompt": prompt,
-                    "model": inputs.get("model", "nvidia/nvclip")
-                }
+                vector=response.json()["metadata"][0]["embedding"] if response.json()["metadata"] else None,
+                metadata=response.json()["metadata"] if response.json()["metadata"] else None,
+                error=response.reason
             )
             
         except Exception as e:
@@ -144,7 +155,6 @@ print_chain = RunnableLambda(pprint)
 
 # 使用示例
 def main():
-    os.environ["NVIDIA_API_KEY"] = "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"
     preprocessor = Preprocessor()
 
     convert_image_to_base64_chain = RunnableLambda(convert_image_to_base64)
