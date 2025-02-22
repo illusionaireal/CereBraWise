@@ -7,7 +7,7 @@ import os
 import data_pre
 import numpy as np
 
-
+API_KEY ="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"
 @dataclass
 class ProcessorOutput:
     """处理器输出数据类"""
@@ -31,16 +31,16 @@ class ClientManager:
     def get_client(self, api_key: str = None) -> Optional[OpenAI]:
         """获取API客户端，如果配置变化则重新创建"""
         # 加载最新的环境变量
-        current_api_key = api_key or os.getenv("NVIDIA_API_KEY")
+        current_api_key = API_KEY
 
         # 如果配置变化，重新创建客户端
         if (current_api_key != self._api_key):
             try:
                 self._client = OpenAI(
-                    api_key=current_api_key,
+                    api_key=API_KEY,
                     base_url="https://integrate.api.nvidia.com/v1/"
                 )
-                self._api_key = current_api_key
+                self._api_key = API_KEY
             except Exception as e:
                 print(f"初始化API客户端失败: {e}")
                 self._reset()
@@ -58,7 +58,7 @@ class Preprocessor:
         """初始化预处理器"""
         self.process_chain = RunnableLambda(self._process)
         self.client_manager = ClientManager()
-        self.api_key = api_key
+        self.api_key = API_KEY
         self.preprocess_chain = RunnableLambda(self._preprocess)
 
     def _process(self, inputs: Dict[str, str]) -> ProcessorOutput:
@@ -164,7 +164,7 @@ def search_chain(inputs: ProcessorOutput) -> Dict:
 
 # 使用示例
 def main():
-    os.environ["NVIDIA_API_KEY"] = "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"
+    os.environ["NVIDIA_API_KEY"] = "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"
     preprocessor = Preprocessor()
 
     convert_image_to_base64_chain = RunnableLambda(convert_image_to_base64)

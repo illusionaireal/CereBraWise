@@ -9,10 +9,8 @@ import time
 import os
 import json
 import img_preprocess
-
 NVIDIA_API_KEY = "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"
 
-os.environ["NVIDIA_API_KEY"] = NVIDIA_API_KEY
 
 # ---------- 状态枚举修正 ----------
 class TourismState(Enum):
@@ -207,25 +205,31 @@ def parse_options(content: str, option_type: str) -> List[str]:
         return re.findall(patterns[option_type], content)
         
 
-def get_rag_multi_model_context(query:str)->str:
+def get_rag_multi_model_context(query: str) -> str:
     '''根据用户输入使用RAG多模态得到信息'''
 
-    # query = '"./data/dataImg/0000215a37942b17.jpg"'
+    query = '"./data/dataImg/0000215a37942b17.jpg"'
     preprocessor = img_preprocess.Preprocessor()
     result = (preprocessor.preprocess_chain | img_preprocess.print_chain | img_preprocess.search_chain).invoke(query)
     print(result.get("matching_location"))
-    # 暂时直接返回，待算法组结果。
 
-    return result.get("matching_location")
+    try:
+        print("rag result" + result)
+    except Exception as e:
+        print(e)
+    print("rag matching_location")
+    print(result.get("matching_location"))
+    return str(result.get("matching_location")[0])
 
 def handle_preference_chain() -> RunnableSequence:
     """专用偏好处理链"""
     llm = create_llm()
     spot_prompt = PromptTemplate(
-        input_variables=["preference_info"],  # 确保输入变量匹配
+        input_variables=["preference_info", "image_info"],  # 确保输入变量匹配
         template="""作为资深旅行规划师，根据用户需求推荐3个景点：
-        
+    
     用户需求：{preference_info}
+    同时根据用户上传的图片检索到了下面的地方：{image_info}
 
     请按以下格式推荐：
     1. [景点名称]：[50字特色描述]
@@ -239,14 +243,17 @@ def handle_preference_chain() -> RunnableSequence:
         | RunnableLambda(lambda x: x.content)
     )
 
-def handle_preference(state: Dict, user_input: str) -> Generator[Dict, None, Dict]:
+def handle_preference(state: Dict, user_input: str, image: str = None) -> Generator[Dict, None, Dict]:
     """动态生成景点推荐（知识库增强版）"""
     # 从知识库动态获取上下文
-    preference = get_rag_multi_model_context(user_input)  # RAG多模态解析
+    image_info = get_rag_multi_model_context(image)  # RAG多模态解析
     
     # 正确初始化处理链
     chain = handle_preference_chain()  
-    result = chain.invoke({"preference_info": preference})  # 参数在此处传递
+    result = chain.invoke({
+        "preference_info": user_input,
+        "image_info": image_info,
+    })  # 参数在此处传递
     
     # 类型安全检查
     if not isinstance(result, str):
@@ -260,7 +267,8 @@ def handle_preference(state: Dict, user_input: str) -> Generator[Dict, None, Dic
         "step": TourismState.SELECT_SPOT,
         "options": parse_options(result, "spot"),
         "context": {
-            "preference_info": preference,
+            "preference_info": user_input,
+            "image_info": image_info,
             "timestamp": time.strftime("%Y-%m-%d %H:%M")
         }
     }
@@ -318,6 +326,7 @@ def handle_spot_selection(state: Dict, user_input: str) -> Generator[Dict, None,
         "options": parse_options(result, "route"),
         "context": {
             "preference_info": state["context"]["preference_info"],
+            "image_info": state["context"]["image_info"],
             "spot_info": selected_spot,
             "timestamp": time.strftime("%Y-%m-%d %H:%M")
         }
@@ -335,15 +344,13 @@ def route_selection_parse(user_input: str, options: list, context: dict) -> str:
 def handle_route_selection_chain() -> RunnableSequence:
     """专用攻略生成链"""
     llm = create_llm()
-    GUIDE_PROMPT = PromptTemplate(
+    guide_prompt = PromptTemplate(
         input_variables=["preference_info", "spot_info", "route_info"],
-        template="""# 深度旅游攻略生成
-        
-    用户需求：{preference_info}
-    选定景点：{spot_info}
-    选择路线：{route_info}
-
-    请包含以下内容，输出排版好的markdown：
+        template="""作为资深旅行规划师，根据下面的信息，做一个深度旅游攻略生成：
+        用户需求：{preference_info}
+        选定景点：{spot_info}
+        选择路线：{route_info}
+    请包含以下内容，输出一份排版好的旅游攻略：
     ## 行程安排（精确到小时，表格形式）
     ## 必玩项目（包含推荐星级）
     ## 餐饮推荐
@@ -352,9 +359,9 @@ def handle_route_selection_chain() -> RunnableSequence:
     )
     return (
         RunnablePassthrough()
-        | GUIDE_PROMPT
-        | llm.bind(stop=["\n\n"])
-        | RunnableLambda(lambda x: x.content)
+        | guide_prompt
+        | llm
+        | StrOutputParser()
     )
 
 def handle_route_selection(state: Dict, user_input: str) -> Generator[Dict, None, Dict]:
@@ -383,6 +390,7 @@ def handle_route_selection(state: Dict, user_input: str) -> Generator[Dict, None
         "context": {
             "preference_info": state["context"]["preference_info"],
             "spot_info": state["context"]["spot_info"],
+            "image_info": state["context"]["image_info"],
             "route_info": selected_route,
             "timestamp": time.strftime("%Y-%m-%d %H:%M")
         }
@@ -666,8 +674,8 @@ if __name__ == "__main__":
     print("✅ 大模型初始化成功")
     
     # 启动交互模式
-    #interactive_demo_with_chain() 使用状态链的demo，需要DEBUG
-    # interactive_demo() #旧状态机函数
-    get_rag_multi_model_context("")
+    # interactive_demo_with_chain() 使用状态链的demo，需要DEBUG
+    interactive_demo() #旧状态机函数
+    # get_rag_multi_model_context("")
 
 

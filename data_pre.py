@@ -5,7 +5,7 @@ import faiss
 import numpy as np
 
 client = OpenAI(
-  api_key="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",
+  api_key="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",
   base_url="https://integrate.api.nvidia.com/v1"
 )
  
@@ -52,12 +52,13 @@ for name in imge_to_category:
         input=[ "tourist attraction",
         path2file],
         model="nvidia/nvclip",
-        encoding_format="float"
+        encoding_format="float"\
     )
     # vectorMap[index] = response.data[1].embedding
     vectorList.append(response.data[1].embedding)
     index = index + 1
     print(response.data[1].embedding)
+    break
 vector_np = np.array(vectorList)
 shape = vector_np.shape[1]
 vector_faiss = faiss.IndexFlatL2(shape)
