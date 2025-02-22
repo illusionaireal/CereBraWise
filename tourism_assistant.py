@@ -8,8 +8,11 @@ import re
 import time
 import os
 import json
+import img_preprocess
 
 NVIDIA_API_KEY = "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"
+
+os.environ["NVIDIA_API_KEY"] = NVIDIA_API_KEY
 
 # ---------- 状态枚举修正 ----------
 class TourismState(Enum):
@@ -206,9 +209,14 @@ def parse_options(content: str, option_type: str) -> List[str]:
 
 def get_rag_multi_model_context(query:str)->str:
     '''根据用户输入使用RAG多模态得到信息'''
+
+    # query = '"./data/dataImg/0000215a37942b17.jpg"'
+    preprocessor = img_preprocess.Preprocessor()
+    result = (preprocessor.preprocess_chain | img_preprocess.print_chain | img_preprocess.search_chain).invoke(query)
+    print(result.get("matching_location"))
     # 暂时直接返回，待算法组结果。
 
-    return query
+    return result.get("matching_location")
 
 def handle_preference_chain() -> RunnableSequence:
     """专用偏好处理链"""
@@ -659,5 +667,7 @@ if __name__ == "__main__":
     
     # 启动交互模式
     #interactive_demo_with_chain() 使用状态链的demo，需要DEBUG
-    interactive_demo() #旧状态机函数
+    # interactive_demo() #旧状态机函数
+    get_rag_multi_model_context("")
+
 

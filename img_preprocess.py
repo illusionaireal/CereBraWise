@@ -76,10 +76,14 @@ class Preprocessor:
         """
         try:
             # 检查输入
-            image_b64 = inputs.get("image_b64")
-            if not image_b64:
-                return ProcessorOutput(error="未提供图片")
-
+            image_url = inputs["image_url"]
+            if image_url:
+                image_str = image_url
+            else:
+                image_b64 = inputs.get("image_b64")
+                if not image_b64:
+                    return ProcessorOutput(error="未提供图片")
+                image_str = f"data:image/jpg;base64,{image_b64}"
             # 获取客户端
             client = self.client_manager.get_client(self.api_key)
             if not client:
@@ -88,7 +92,7 @@ class Preprocessor:
             # 使用NVIDIA CLIP生成向量
             response = client.embeddings.create(
                 input=[
-                    f"data:image/jpg;base64,{image_b64}"
+                    image_str
                 ],
                 model=inputs.get("model", "nvidia/nvclip"),
                 encoding_format="float"
@@ -108,16 +112,19 @@ class Preprocessor:
 
     def preprocess(
             self,
-            image_b64: str,
+            image_url: str = None,
+            image_b64: str = None,
             model: str = "nvidia/nvclip"
     ) -> ProcessorOutput:
         return self._process({
+            "image_url": image_url,
             "image_b64": image_b64,
             "model": model
         })
 
-    def _preprocess(self, image_b64: str, model: str = "nvidia/nvclip") -> ProcessorOutput:
+    def _preprocess(self, image_url : str = None, image_b64: str = None, model: str = "nvidia/nvclip") -> ProcessorOutput:
         return self.process_chain.invoke({
+            "image_url": image_url,
             "image_b64": image_b64,
             "model": model
         })
