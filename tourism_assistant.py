@@ -1,7 +1,7 @@
 from enum import Enum
 from typing import Dict, Any, Generator, List
 from langchain_core.output_parsers import StrOutputParser
-from langchain_core.runnables import RunnablePassthrough, RunnableLambda, RunnableSequence
+from langchain_core.runnables import RunnablePassthrough, RunnableLambda, RunnableSequence, RunnableBranch, RunnableAssign
 from langchain.prompts import PromptTemplate
 from langchain_nvidia_ai_endpoints import ChatNVIDIA
 import re
@@ -19,7 +19,7 @@ class TourismState(Enum):
     SELECT_ROUTE = "选择路线"
 
 
-# ---------- 处理链模版 ----------
+# ---------- 处理链 示例代码 ----------
 def build_processing_chain(prompt: PromptTemplate) -> RunnableSequence:
     """处理链模版"""
     llm = create_llm()
@@ -46,15 +46,15 @@ def format_streaming_response(content: str, options: list = None) -> Generator[D
         }
         time.sleep(0.2)  # 调整到更自然的语速
 
-# ---------- Markdown渲染 ----------
+# ---------- Markdown渲染 未实装----------
 def render_markdown(content: str) -> str:
     """安全渲染Markdown内容"""
     sanitized = re.sub(r'[^\w\s\-\.\!\?\u4e00-\u9fa5]', '', content)
     return f"```markdown\n{sanitized}\n```"
 
-# ---------- 核心函数重构 ----------
 def create_llm():
     """创建LLM实例"""
+    # NIM模版代码
     return ChatNVIDIA(
         model="meta/llama-3.3-70b-instruct",
         temperature=0.2,
@@ -63,6 +63,50 @@ def create_llm():
         nvidia_api_key=NVIDIA_API_KEY
     )
 
+# ---------- 新增链式状态处理 ----------
+def build_state_chain() -> RunnableBranch:
+    """构建链式状态处理器"""
+    return RunnableBranch(
+        # INIT状态处理
+        (lambda s: s["step"] == TourismState.INIT, 
+         RunnableAssign({
+             "messages": RunnableLambda(handle_init) | format_streaming_response,
+             "step": lambda _: TourismState.GET_PREFERENCE
+         })),
+         
+        # GET_PREFERENCE状态处理
+        (lambda s: s["step"] == TourismState.GET_PREFERENCE,
+         RunnableAssign({
+             "messages": RunnableLambda(handle_preference) | format_streaming_response,
+             "options": RunnableLambda(lambda s: parse_options(s["messages"], "spot")),
+             "step": lambda _: TourismState.SELECT_SPOT
+         })),
+         
+        # SELECT_SPOT状态处理 
+        (lambda s: s["step"] == TourismState.SELECT_SPOT,
+         RunnableAssign({
+             "messages": RunnableLambda(handle_spot_selection) | format_streaming_response,
+             "options": RunnableLambda(lambda s: parse_options(s["messages"], "route")),
+             "step": lambda _: TourismState.SELECT_ROUTE
+         })),
+         
+        # 新增SELECT_ROUTE状态处理
+        (lambda s: s["step"] == TourismState.SELECT_ROUTE,
+         RunnableAssign({
+             "messages": RunnableLambda(handle_route_selection) | format_streaming_response,
+             "step": lambda _: TourismState.INIT
+         })),
+         
+        # 默认处理 (添加True作为默认条件)
+        (True,
+         RunnableAssign({
+             "messages": RunnableLambda(handle_unknown) | format_streaming_response,
+             "step": lambda _: TourismState.INIT
+         }))
+    )
+
+
+# ---------- 更新状态机函数 ----------
 def state_machine(state: Dict, user_input: str) -> Generator[Dict, None, None]:
     """增强型状态机"""
     current_state = {
@@ -468,7 +512,80 @@ def test_route_selection(prev_state: Dict) -> Dict:
     print("✅ 路线选择测试通过")
     return state
 
+# ---------- 新增链式状态机实现 ----------
+def new_state_machine(state: Dict, user_input: str) -> Generator[Dict, None, None]:
+    """链式状态机（新增实现）"""
+    processing_chain = (
+        RunnablePassthrough.assign(
+            # 预处理用户输入
+            processed_input=lambda x: x["user_input"].strip()
+        )
+        | build_state_chain()
+        | RunnableAssign({
+            "final_output": lambda x: x["messages"][-1]["content"]
+        })
+    )
+    
+    try:
+        # 执行处理链
+        result = processing_chain.invoke({
+            **state,
+            "user_input": user_input,
+            "messages": []
+        })
+        
+        # 流式输出处理
+        yield from result["messages"]
+        yield {"final_state": result}
+        
+    except Exception as e:
+        yield from format_streaming_response(f"⚠️ 处理异常：{str(e)}")
+        yield {"final_state": state}
+
+
 # 新增交互演示函数
+def interactive_demo_with_chain():
+    """命令行交互演示"""
+    print("🛫 旅游助手 控制台交互模式（输入exit退出）")
+    state = {"step": TourismState.INIT}
+    
+    while True:
+        try:
+            # 根据状态提示输入
+            if state["step"] == TourismState.INIT:
+                user_input = input("\n> 按回车开始规划旅程：") or ""
+            elif state["step"] == TourismState.GET_PREFERENCE:
+                user_input = input("\n> 请描述您的旅游偏好（如：想看皇家建筑）：")
+            elif state["step"] == TourismState.SELECT_SPOT:
+                print("\n推荐景点：")
+                for i, spot in enumerate(state["options"], 1):
+                    print(f"  {i}. {spot}")
+                user_input = input("> 请选择景点编号或名称：")
+            elif state["step"] == TourismState.SELECT_ROUTE:
+                print("\n推荐路线：")
+                for i, route in enumerate(state["options"], 1):
+                    print(f"  {i}. {route}")
+                user_input = input("> 请选择路线编号或名称：")
+            
+            if user_input.lower() == "exit":
+                break
+
+            # 修改调用点为新状态机
+            response_gen = new_state_machine(state, user_input)  # 改为调用新状态机
+            
+            # 显示最终结果
+            if state["step"] == TourismState.INIT and "selected_route" in state:
+                print("\n\n✅ 行程规划完成！")
+                print("-"*50)
+                print(response_gen.send(None))
+                print("-"*50)
+                state = {"step": TourismState.INIT}  # 重置状态
+
+        except KeyboardInterrupt:
+            print("\n\n👋 感谢使用，再见！")
+            break
+
+# 旧的状态机函数，保留用于验证。
 def interactive_demo():
     """命令行交互演示"""
     print("🛫 旅游助手 控制台交互模式（输入exit退出）")
@@ -495,22 +612,14 @@ def interactive_demo():
             if user_input.lower() == "exit":
                 break
 
-            # 处理输入
-            full_response = ""
-            response_gen = state_machine(state, user_input)
-            for chunk in response_gen:
-                if chunk.get("final_state"):
-                    state = chunk["final_state"]
-                    continue
-                content = chunk['messages'][0]['content']
-                print(f"\r系统：{full_response}{content}", end="", flush=True)
-                full_response += content
+            # 修改调用点为新状态机
+            response_gen = new_state_machine(state, user_input)  # 改为调用新状态机
             
             # 显示最终结果
             if state["step"] == TourismState.INIT and "selected_route" in state:
                 print("\n\n✅ 行程规划完成！")
                 print("-"*50)
-                print(full_response)
+                print(response_gen.send(None))
                 print("-"*50)
                 state = {"step": TourismState.INIT}  # 重置状态
 
@@ -520,10 +629,12 @@ def interactive_demo():
 
 # ---------- 更新主流程 ----------
 if __name__ == "__main__":
+    print("开始咯~")
     # 初始化大模型
     llm = create_llm()
     print("✅ 大模型初始化成功")
     
     # 启动交互模式
-    interactive_demo()
+    interactive_demo_with_chain()
+    # interactive_demo() #旧状态机函数
 
