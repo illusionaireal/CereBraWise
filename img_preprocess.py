@@ -6,7 +6,6 @@ from langchain.schema.runnable import RunnableLambda
 import os
 import data_pre
 import numpy as np
-import pandas as pd
 
 
 @dataclass
