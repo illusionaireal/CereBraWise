@@ -4,10 +4,12 @@ import base64
 from openai import OpenAI
 from langchain.schema.runnable import RunnableLambda
 import os
-import data_pre_old
+import data_pre
 import numpy as np
 
-API_KEY ="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"
+API_KEY = "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"
+
+
 @dataclass
 class ProcessorOutput:
     """处理器输出数据类"""
@@ -122,7 +124,8 @@ class Preprocessor:
             "model": model
         })
 
-    def _preprocess(self, image_url : str = None, image_b64: str = None, model: str = "nvidia/nvclip") -> ProcessorOutput:
+    def _preprocess(self, image_url: str = None, image_b64: str = None,
+                    model: str = "nvidia/nvclip") -> ProcessorOutput:
         return self.process_chain.invoke({
             "image_url": image_url,
             "image_b64": image_b64,
@@ -138,7 +141,7 @@ def convert_image_to_base64(image_path: str) -> str:
 
 def pprint(result: ProcessorOutput):
     if result.vector:
-        print(result.vector)
+        # print(result.vector)
         print(f"向量生成成功，维度: {len(result.vector)}")
     else:
         print(result.error)
@@ -151,14 +154,14 @@ print_chain = RunnableLambda(pprint)
 def search_chain(inputs: ProcessorOutput) -> Dict:
     result = {}
     if inputs.vector:
-        d, i = data_pre_old.vector_faiss.search(np.array([inputs.vector], dtype='float32'), 4)
-        print("距离:", d)
-        print("索引:", i)
-        result["matching_location"] = [list(data_pre_old.imge_to_category.items())[index][1] for index in np.nditer(i)]
+        d, i = data_pre.vector_faiss.search(np.array([inputs.vector], dtype='float32'), 4)
+        # print("距离:", d)
+        # print("索引:", i)
+        result["matching_location"] = [list(data_pre.imge_to_category.items())[index][1] for index in np.nditer(i)]
     else:
         result["error"] = inputs.error
-        print(inputs.error)
-    print(result)
+        # print(inputs.error)
+    # print(result)
     return result
 
 
